@@ -1,15 +1,18 @@
-
-if (!require("ggplot2")) install.packages("ggplot2")
-if (!require("stringr")) install.packages("stringr")
-if (!require("dplyr")) install.packages("dplyr")
-if (!require("tidyverse")) install.packages("tidyverse")
-
-
-library(tidyverse)
 library(dplyr)
+library(forcats)
+library(ggplot2)
+library(yaml)
 
-df <- readr::read_csv2(
-  "individu_reg.csv",
+source("functions.R", encoding = "UTF-8")
+
+# ENVIRONNEMENT -------------------------
+
+api_token <- yaml::read_yaml("secrets.yaml")$JETON_API
+
+# IMPORT DONNEES ------------------
+
+df <- arrow::read_parquet(
+  "individu_reg.parquet",
   col_select = c(
     "region", "aemm", "aged", "anai", "catl", "cs1", "cs2", "cs3",
     "couple", "na38", "naf08", "pnai12", "sexe", "surf", "tp",
@@ -17,15 +20,17 @@ df <- readr::read_csv2(
   )
 )
 
+# RETRAITEMENT DONNEES -------------------
+
+df$sexe <- df$sexe %>%
+  as.character() %>%
+  fct_recode(Homme = "1", Femme = "2")
+
+
+# STATISTIQUES DESCRIPTIVES --------------------
+
 summarise(group_by(df, aged), n())
 
-decennie_a_partir_annee <- function(annee) {
-  return(annee - annee %%
-           10)
-}
-
-ggplot(df) +
-  geom_histogram(aes(x = 5 * floor(as.numeric(aged) / 5)), stat = "count")
 
 # part d'homme dans chaque cohort
 df %>%
@@ -46,49 +51,55 @@ df2 <- df %>%
   summarise(x = n()) %>%
   group_by(couple) %>%
   mutate(y = 100 * x / sum(x))
+
+df %>%
+  filter(sexe == "Homme") %>%
+  mutate(aged = as.numeric(aged)) %>%
+  pull(aged) %>%
+  stats_agregees()
+
+df %>%
+  filter(sexe == "Femme") %>%
+  mutate(aged = as.numeric(aged)) %>%
+  pull(aged) %>%
+  stats_agregees()
+
+stats_age <- df %>%
+  mutate(age = as.numeric(aged))
+group_by(decennie = decennie_a_partir_annee(age)) %>%
+  summarise(n())
+
+table_age <- gt::gt(stats_age) %>%
+  gt::tab_header(
+    title = "Distribution des âges dans notre population"
+  ) %>%
+  gt::fmt_number(
+    columns = `n()`,
+    sep_mark = " ",
+    decimals = 0
+  ) %>%
+  gt::cols_label(
+    decennie = "Tranche d'âge",
+    `n()` = "Population"
+  )
+
+# GRAPHIQUES -----------
+
+ggplot(df) +
+  geom_histogram(aes(x = 5 * floor(as.numeric(aged) / 5)), stat = "count")
+
+
 p <- ggplot(df2) +
   geom_bar(aes(x = trans, y = y, color = couple), stat = "identity",
            position = "dodge")
 
 ggsave("p.png", p)
 
-library(forcats)
-df$sexe <- df$sexe %>%
-  as.character() %>%
-  fct_recode(Homme = "1", Femme = "2")
 
-# fonction de stat agregee
-fonction_de_stat_agregee <- function(a, b = "moyenne", ...) {
-  if (b == "moyenne") {
-    x <- mean(a, na.rm = TRUE, ...)
-  } else if (b == "ecart-type" || b == "sd") {
-    x <- sd(a, na.rm = TRUE, ...)
-  } else if (b == "variance") {
-    x <- var(a, na.rm = TRUE, ...)
-  }
-  return(x)
-}
+# MODELISATION ---------------------
 
-fonction_de_stat_agregee(rnorm(10))
-fonction_de_stat_agregee(rnorm(10), "ecart-type")
-fonction_de_stat_agregee(rnorm(10), "variance")
 
 df %>%
-  filter(sexe == "Homme") %>%
-  mutate(aged = as.numeric(aged)) %>%
-  pull(aged) %>%
-  fonction_de_stat_agregee()
-
-df %>%
-  filter(sexe == "Femme") %>%
-  mutate(aged = as.numeric(aged)) %>%
-  pull(aged) %>%
-  fonction_de_stat_agregee()
-
-api_token <- "trotskitueleski$1917"
-
-# modelisation
-df %>%
-  select(surf, cs1, ur, couple, aged) %>%
+  dplyr::select(surf, cs1, ur, couple, aged) %>%
   filter(surf != "Z") %>%
   MASS::polr(factor(surf) ~ cs1 + factor(ur), .)
